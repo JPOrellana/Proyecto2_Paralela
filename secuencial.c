@@ -2,36 +2,49 @@
 #include <stdlib.h>
 #include <string.h>
 #include <openssl/des.h>
+#include <time.h>
 
 #define BLOCK_SIZE 8  // DES usa bloques de 8 bytes
 
+// Función para adaptar la longitud de la llave a múltiplos de 8 bytes (DES usa bloques de 8 bytes)
+void adaptarLlave(char *llaveOriginal, unsigned char *llaveAdaptada, int longitudLlave) {
+    memset(llaveAdaptada, 0, 8); // Inicializamos con ceros
+
+    // Copiamos hasta los primeros 8 bytes de la llave original
+    if (longitudLlave <= 8) {
+        memcpy(llaveAdaptada, llaveOriginal, longitudLlave);
+    } else {
+        memcpy(llaveAdaptada, llaveOriginal, 8);  // Si es mayor, cortamos a 8 bytes
+    }
+}
+
 // Función para codificar (cifrar) el texto
-void codificarTexto(char *llave, unsigned char *textoPlano, unsigned char *textoCodificado, int longitud) {
+void codificarTexto(unsigned char *llaveAdaptada, unsigned char *textoPlano, unsigned char *textoCodificado, int longitud) {
     DES_cblock bloqueLlave;
     DES_key_schedule planLlave;
 
     // Convertir la llave en un DES_cblock
-    memcpy(bloqueLlave, llave, BLOCK_SIZE);
+    memcpy(bloqueLlave, llaveAdaptada, 8);
     DES_set_key((DES_cblock *)bloqueLlave, &planLlave);
 
     // Codificar cada bloque de 8 bytes
-    for (int i = 0; i < longitud; i += BLOCK_SIZE) {
+    for (int i = 0; i < longitud; i += 8) {
         DES_ecb_encrypt((DES_cblock *)(textoPlano + i), (DES_cblock *)(textoCodificado + i), &planLlave, DES_ENCRYPT);
     }
 }
 
-// Función para decodificar (descifrar) el texto
-void decodificarTexto(char *llave, unsigned char *textoCodificado, unsigned char *textoDecodificado, int longitud) {
+// Función para descifrar el texto
+void descifrarTexto(unsigned char *llaveAdaptada, unsigned char *textoCodificado, unsigned char *textoDescifrado, int longitud) {
     DES_cblock bloqueLlave;
     DES_key_schedule planLlave;
 
     // Convertir la llave en un DES_cblock
-    memcpy(bloqueLlave, llave, BLOCK_SIZE);
+    memcpy(bloqueLlave, llaveAdaptada, 8);
     DES_set_key((DES_cblock *)bloqueLlave, &planLlave);
 
-    // Decodificar cada bloque de 8 bytes
-    for (int i = 0; i < longitud; i += BLOCK_SIZE) {
-        DES_ecb_encrypt((DES_cblock *)(textoCodificado + i), (DES_cblock *)(textoDecodificado + i), &planLlave, DES_DECRYPT);
+    // Descifrar cada bloque de 8 bytes
+    for (int i = 0; i < longitud; i += 8) {
+        DES_ecb_encrypt((DES_cblock *)(textoCodificado + i), (DES_cblock *)(textoDescifrado + i), &planLlave, DES_DECRYPT);
     }
 }
 
@@ -60,56 +73,68 @@ int cargarArchivo(const char *nombreArchivo, unsigned char **texto) {
     return tamArchivo;
 }
 
-// Función para guardar un archivo con el texto proporcionado
-void guardarArchivo(const char *nombreArchivo, unsigned char *texto, int longitud) {
-    FILE *archivo = fopen(nombreArchivo, "wb");
-    if (!archivo) {
-        perror("Error al abrir el archivo para escritura");
-        return;
+// Función para realizar fuerza bruta sobre las llaves
+void fuerzaBrutaLlave(unsigned char *textoCodificado, unsigned char *textoOriginal, int longitud) {
+    unsigned char textoDescifrado[longitud + 1];
+    unsigned char llaveAdaptada[8];
+
+    clock_t inicio = clock();  // Iniciar cronómetro
+
+    // Probar todas las combinaciones de llaves de 8 caracteres (o menos, con padding)
+    for (unsigned long long i = 0; i < (1ULL << 56); i++) {
+        // Convertir el número a una llave de longitud variable y adaptarla a 8 bytes
+        char llave[16];
+        snprintf(llave, sizeof(llave), "%llu", i);
+
+        // Adaptar la longitud de la llave
+        adaptarLlave(llave, llaveAdaptada, strlen(llave));
+
+        // Descifrar el texto con la llave actual
+        descifrarTexto(llaveAdaptada, textoCodificado, textoDescifrado, longitud);
+
+        // Comparar el texto descifrado con el original
+        if (memcmp(textoOriginal, textoDescifrado, longitud) == 0) {
+            printf("¡Llave encontrada! Llave: %s\n", llave);
+            printf("Texto descifrado: %s\n", textoDescifrado);
+            break;
+        }
     }
 
-    fwrite(texto, 1, longitud, archivo);
-    fclose(archivo);
+    clock_t fin = clock();  // Detener cronómetro
+    double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
+    printf("Tiempo de ejecución: %f segundos\n", tiempo);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 4 || strcmp(argv[1], "-k") != 0) {
-        printf("Uso: %s -k <llave> <archivo>\n", argv[0]);
+    if (argc != 3) {
+        printf("Uso: %s <input.txt> <llave>\n", argv[0]);
         return 1;
     }
 
-    char *llave = argv[2];
-    char *archivoEntrada = argv[3];
+    char *archivoEntrada = argv[1];
+    char *llaveOriginal = argv[2];
+    int longitudLlave = strlen(llaveOriginal);
 
-    if (strlen(llave) != BLOCK_SIZE) {
-        printf("La clave debe tener 8 caracteres.\n");
-        return 1;
-    }
+    unsigned char llaveAdaptada[8];
+    adaptarLlave(llaveOriginal, llaveAdaptada, longitudLlave);  // Adaptar la longitud de la llave
 
-    unsigned char *textoPlano;
-    int longitudTexto = cargarArchivo(archivoEntrada, &textoPlano);
-    if (longitudTexto < 0) {
-        return 1;
-    }
+    unsigned char *textoOriginal;
+    int longitudOriginal = cargarArchivo(archivoEntrada, &textoOriginal);
+    if (longitudOriginal < 0) return 1;
 
-    // Ajustar el tamaño del texto a múltiplos de BLOCK_SIZE
-    int longitudAjustada = ((longitudTexto + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+    // Ajustar el tamaño del texto a múltiplos de BLOCK_SIZE (8 bytes)
+    int longitudAjustada = ((longitudOriginal + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
     unsigned char *textoCodificado = (unsigned char *)malloc(longitudAjustada);
-    unsigned char *textoDecodificado = (unsigned char *)malloc(longitudAjustada);
 
     // Codificar el texto
-    codificarTexto(llave, textoPlano, textoCodificado, longitudAjustada);
-    guardarArchivo("texto_cifrado.txt", textoCodificado, longitudAjustada);
-    printf("Texto cifrado guardado en texto_cifrado.txt\n");
+    codificarTexto(llaveAdaptada, textoOriginal, textoCodificado, longitudAjustada);
+    printf("Texto cifrado guardado en memoria.\n");
 
-    // Decodificar el texto
-    decodificarTexto(llave, textoCodificado, textoDecodificado, longitudAjustada);
-    guardarArchivo("texto_descifrado.txt", textoDecodificado, longitudAjustada);
-    printf("Texto descifrado guardado en texto_descifrado.txt\n");
+    // Realizar la fuerza bruta para encontrar la llave correcta
+    fuerzaBrutaLlave(textoCodificado, textoOriginal, longitudAjustada);
 
-    free(textoPlano);
+    free(textoOriginal);
     free(textoCodificado);
-    free(textoDecodificado);
 
     return 0;
 }
