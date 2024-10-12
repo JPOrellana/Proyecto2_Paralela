@@ -6,16 +6,13 @@
 
 #define BLOCK_SIZE 8  // DES usa bloques de 8 bytes
 
-// Función para adaptar la longitud de la llave a múltiplos de 8 bytes (DES usa bloques de 8 bytes)
-void adaptarLlave(char *llaveOriginal, unsigned char *llaveAdaptada, int longitudLlave) {
-    memset(llaveAdaptada, 0, 8); // Inicializamos con ceros
-
-    // Copiamos hasta los primeros 8 bytes de la llave original
-    if (longitudLlave <= 8) {
-        memcpy(llaveAdaptada, llaveOriginal, longitudLlave);
-    } else {
-        memcpy(llaveAdaptada, llaveOriginal, 8);  // Si es mayor, cortamos a 8 bytes
+// Función para adaptar un número de 56 bits en una llave de 8 bytes para DES
+void adaptarLlaveNumerica(unsigned long long numero, unsigned char *llaveAdaptada) {
+    // El número es de 56 bits, lo que corresponde a 7 bytes. Vamos a mapearlo.
+    for (int i = 0; i < 7; i++) {
+        llaveAdaptada[6 - i] = (numero >> (i * 8)) & 0xFF;  // Extraemos byte por byte
     }
+    llaveAdaptada[7] = 0;  // El último byte siempre será 0
 }
 
 // Función para codificar (cifrar) el texto
@@ -80,21 +77,17 @@ void fuerzaBrutaLlave(unsigned char *textoCodificado, unsigned char *textoOrigin
 
     clock_t inicio = clock();  // Iniciar cronómetro
 
-    // Probar todas las combinaciones de llaves de 8 caracteres (o menos, con padding)
+    // Probar todas las combinaciones de llaves de 56 bits
     for (unsigned long long i = 0; i < (1ULL << 56); i++) {
-        // Convertir el número a una llave de longitud variable y adaptarla a 8 bytes
-        char llave[16];
-        snprintf(llave, sizeof(llave), "%llu", i);
-
-        // Adaptar la longitud de la llave
-        adaptarLlave(llave, llaveAdaptada, strlen(llave));
+        // Convertir el número a una llave de 56 bits adaptada a 8 bytes
+        adaptarLlaveNumerica(i, llaveAdaptada);
 
         // Descifrar el texto con la llave actual
         descifrarTexto(llaveAdaptada, textoCodificado, textoDescifrado, longitud);
 
         // Comparar el texto descifrado con el original
         if (memcmp(textoOriginal, textoDescifrado, longitud) == 0) {
-            printf("¡Llave encontrada! Llave: %s\n", llave);
+            printf("¡Llave encontrada! Llave: %llu\n", i);
             printf("Texto descifrado: %s\n", textoDescifrado);
             break;
         }
@@ -116,7 +109,7 @@ int main(int argc, char *argv[]) {
     int longitudLlave = strlen(llaveOriginal);
 
     unsigned char llaveAdaptada[8];
-    adaptarLlave(llaveOriginal, llaveAdaptada, longitudLlave);  // Adaptar la longitud de la llave
+    adaptarLlaveNumerica(atoi(llaveOriginal), llaveAdaptada);  // Adaptar la longitud de la llave
 
     unsigned char *textoOriginal;
     int longitudOriginal = cargarArchivo(archivoEntrada, &textoOriginal);
