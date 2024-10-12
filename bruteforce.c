@@ -35,7 +35,7 @@ void encrypt(long key, char *ciph, int len) {
 
 char search[] = "hello";
 
-int tryKey(long key, char *ciph, int len) {
+int attemptDecrypt(long key, char *ciph, int len) {
     char temp[len+1];
     memcpy(temp, ciph, len);
     temp[len] = 0;
@@ -49,27 +49,25 @@ int tryKey(long key, char *ciph, int len) {
     return 0;
 }
 
-int loadTextFromFile(const char *filename, char **text, int *length) {
+int retrieveText(const char *filename, char **text, int *length) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         perror("Error al abrir el archivo");
         return 0;
     }
 
-    fseek(file, 0, SEEK_END);
-    *length = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    *text = (char *)malloc(*length);
-    if (*text == NULL) {
-        perror("Error de asignación de memoria");
-        fclose(file);
-        return 0;
+    char buffer[1024];
+    if (fgets(buffer, sizeof(buffer), file) != NULL) {
+        size_t len = strlen(buffer);
+        if (buffer[len - 1] == '\n') {
+            buffer[len - 1] = '\0';
+            len--;
+        }
+        *length = (int)len;
+        *text = (char *)malloc(*length + 1);
+        strcpy(*text, buffer);
     }
-
-    fread(*text, 1, *length, file);
     fclose(file);
-
     return 1;
 }
 
@@ -86,7 +84,6 @@ int main(int argc, char *argv[]) {
     long mylower, myupper;
     MPI_Status st;
     MPI_Request req;
-    int flag;
     MPI_Comm comm = MPI_COMM_WORLD;
 
     MPI_Init(NULL, NULL);
@@ -95,20 +92,60 @@ int main(int argc, char *argv[]) {
 
     clock_t start_time_C, end_time_C;
     double start_time, end_time;
-    long encryptionKey = 123456L;
+    long encryptionKey = -1; // Valor inicial que indica que no se ha proporcionado clave
 
     int option;
+    int key_provided = 0; // Variable para rastrear si -k fue proporcionado
+    char *endptr;
 
     while ((option = getopt(argc, argv, "k:")) != -1) {
         switch (option) {
             case 'k':
-                encryptionKey = atol(optarg);
+                if (optarg != NULL) {
+                    encryptionKey = strtol(optarg, &endptr, 10);
+                    
+                    // Verificar si el argumento es un número válido
+                    if (*endptr != '\0' || encryptionKey <= 0) {
+                        if (id == 0) {
+                            fprintf(stderr, "Error: El argumento de -k debe ser un número entero positivo.\n");
+                        }
+                        MPI_Finalize();
+                        exit(1);
+                    }
+                    key_provided = 1; // Marcamos que -k fue especificado y es válido
+                } else {
+                    if (id == 0) {
+                        fprintf(stderr, "Error: La opción -k requiere un argumento. Uso: %s -k key\n", argv[0]);
+                    }
+                    MPI_Finalize();
+                    exit(1);
+                }
                 break;
             default:
-                fprintf(stderr, "Uso: %s [-k key]\n", argv[0]);
+                if (id == 0) {
+                    fprintf(stderr, "Uso: %s -k key\n", argv[0]);
+                }
                 MPI_Finalize();
                 exit(1);
         }
+    }
+
+    // Verificar si se proporcionó la clave de encriptación
+    if (encryptionKey == -1 || !key_provided) {
+        if (id == 0) {
+            fprintf(stderr, "Error: La clave de encriptación es obligatoria. Use la opción -k para especificarla.\n");
+        }
+        MPI_Finalize();
+        exit(1);
+    }
+
+    // Verificar que la clave esté dentro del rango DES (0 <= clave < 2^56)
+    if (encryptionKey <= 0 || encryptionKey >= upper) {
+        if (id == 0) {
+            fprintf(stderr, "Error: La clave de encriptación debe estar en el rango de 1 a %li.\n", upper - 1);
+        }
+        MPI_Finalize();
+        exit(1);
     }
 
     start_time_C = clock();
@@ -116,7 +153,7 @@ int main(int argc, char *argv[]) {
 
     int range_per_node = upper / N;
     mylower = range_per_node * id;
-    myupper = range_per_node * (id+1) - 1;
+    myupper = range_per_node * (id + 1) - 1;
     if (id == N - 1) {
         myupper = upper;
     }
@@ -125,7 +162,7 @@ int main(int argc, char *argv[]) {
     int textLength;
 
     if (id == 0) {
-        if (!loadTextFromFile("input.txt", &text, &textLength)) {
+        if (!retrieveText("input.txt", &text, &textLength)) {
             MPI_Finalize();
             return 1;
         }
@@ -146,7 +183,7 @@ int main(int argc, char *argv[]) {
     MPI_Irecv(&found, 1, MPI_LONG, MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &req);
 
     for (int i = mylower; i < myupper && (found == 0); ++i) {
-        if (tryKey(i, text, textLength)) {
+        if (attemptDecrypt(i, text, textLength)) {
             found = i;
             for (int node = 0; node < N; node++) {
                 MPI_Send(&found, 1, MPI_LONG, node, 0, MPI_COMM_WORLD);
