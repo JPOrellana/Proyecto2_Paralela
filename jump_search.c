@@ -182,7 +182,11 @@ int main(int argc, char *argv[]) {
 
     MPI_Irecv(&found, 1, MPI_LONG, MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &req);
 
-    for (int i = mylower; i < myupper && (found == 0); ++i) {
+    // Implementación del Jump Search
+    int jump_size = 1000;
+    long i = mylower;
+
+    while (i <= myupper && (found == 0)) {
         if (attemptDecrypt(i, text, textLength)) {
             found = i;
             for (int node = 0; node < N; node++) {
@@ -190,6 +194,21 @@ int main(int argc, char *argv[]) {
             }
             break;
         }
+
+        // Si no se encuentra en el salto, hacer una búsqueda secuencial en el intervalo
+        long end_of_jump = (i + jump_size <= myupper) ? i + jump_size : myupper;
+        for (long j = i + 1; j < end_of_jump && (found == 0); j++) {
+            if (attemptDecrypt(j, text, textLength)) {
+                found = j;
+                for (int node = 0; node < N; node++) {
+                    MPI_Send(&found, 1, MPI_LONG, node, 0, MPI_COMM_WORLD);
+                }
+                break;
+            }
+        }
+
+        // Avanzar al siguiente salto
+        i += jump_size;
     }
 
     if (id == 0) {
